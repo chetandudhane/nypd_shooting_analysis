@@ -1,0 +1,380 @@
+---
+title: "NYPD 2"
+author: "Chetan Dudhane"
+date: "2024-08-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document for reproducing NYPD shooting data analysis
+
+
+## 1. Importing data
+
+#### 1.1 Load the library `tidyverse`
+``` {r load_tidyverse, echo=TRUE}
+library(tidyverse)
+```
+<br>
+
+#### 1.2. Load dataset from the url
+``` {r import_url, echo=TRUE}
+url_in = "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd = read_csv(url_in)
+head(nypd)
+```
+<br>
+
+## 2. Overview of the data
+``` {r overview}
+glimpse(nypd)
+summary(nypd)
+```
+
+## 3. Exploratory Data Analysis
+<br>
+
+#### 3.1 Deleting location co-ordinate columns. We dont need it for this analysis
+``` {r}
+nypd = nypd %>%
+  select(-c(X_COORD_CD:Lon_Lat))
+```
+
+<br>
+
+#### 3.2 Changing date column to `date` type
+``` {r}
+library(lubridate)
+nypd = nypd %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+```
+
+<br>
+
+#### 3.3 Check for missing values in each column
+``` {r}
+missing_values <- nypd %>% 
+  summarise_all(~sum(is.na(.)))
+glimpse(missing_values)
+```
+
+<br>
+
+#### 3.4 Deleting columns with high number of missing values
+
+- Following columns have a very high number of missing values:
+  - LOC_OF_OCCUR_DESC
+  - LOC_CLASSFCTN_DESC
+  - LOCATION_DESC
+  
+- Hence, deleting these columns from our analysis as they dont add any insight
+<br>
+
+```{r}
+nypd = nypd %>%
+  select(-c("LOC_OF_OCCUR_DESC", "LOC_CLASSFCTN_DESC", "LOCATION_DESC"))
+```
+
+<br>
+
+#### 3.5 Overview of the final dataframe, which we will use for analysis
+```{r}
+summary(nypd)
+```
+
+<br>
+
+## 4. Visualisations
+
+<br>
+
+#### 4.1 Distribution of Incidents over time
+
+- Lets visualise the number of incidents over time
+
+```{r}
+library(scales)
+library(dplyr)
+library(ggplot2)
+library(zoo)  # For calculating the moving average
+
+# Calculate the average number of incidents
+average_incidents <- nypd %>%
+  count(OCCUR_DATE) %>%
+  summarise(avg = mean(n)) %>%
+  pull(avg)
+
+# Calculate the moving average
+nypd_moving_avg <- nypd %>%
+  count(OCCUR_DATE) %>%
+  mutate(moving_avg = rollmean(n, k = 7, fill = NA, align = "right"))  # 7-day moving average
+
+# Plot the number of incidents over time
+nypd %>%
+  count(OCCUR_DATE) %>%
+  ggplot(aes(x = OCCUR_DATE, y = n)) +
+  geom_line() +
+  geom_smooth(method = "lm", se = FALSE, color = "green") +  # Add regression line +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  scale_x_date(date_breaks = "12 month", date_labels = "%b %Y") +
+  geom_hline(yintercept = average_incidents, linetype = "dotted", color = "red") +
+  labs(title = "Number of Incidents Over Time", x = "Date", y = "Number of Incidents")
+
+
+```
+
+- We notice 2 main spikes in incidents:
+  - First in 2011-12
+  - But the highest spike in 2020-21
+
+- Horizontal dotted red line denotes - Average number of incidents over the years, which is around 5
+
+**- Modelled Regression Line**
+
+  - Dark green line is the modelled Regression line of the data set
+  
+  - It shows a negative trend of incidents from 2006 to 2024
+  
+  - This shows that crime rate in New York is declining
+
+<br>
+
+#### 4.2 Incidents by Borough
+
+- Lets look at incidents by Borough
+
+<br>
+```{r}
+# Plot incidents by borough
+nypd %>%
+  count(`BORO`) %>%
+  ggplot(aes(x = reorder(`BORO`, n), y = n)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = n), hjust = 1.1, color='white') +
+  coord_flip() +
+  labs(title = "Number of Incidents by Borough", x = "Borough", y = "Number of Incidents") +
+  theme_light()
+```
+<br>
+
+- We note that Brooklyn has the highest number of incidents in NY, followed by Bronx
+
+- Staten Island has the lowest crime rate
+
+<br>
+
+#### 4.3 Incidents by Precinct
+
+- Similar to Borough, lets identify which precint has the highest number of incidents reported
+
+<br>
+```{r, message=FALSE, warning=FALSE}
+
+nypd %>%
+  count(`PRECINCT`) %>%
+  arrange(desc(n)) %>%
+  slice_head(n=25) %>%
+  ggplot(aes(x = reorder(`PRECINCT`, n), y = n)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = n), hjust = 1.3, color='black', fontsize=5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Number of Incidents by Precinct (Highest 25)", x = "Precinct", y = "Number of Incidents") +
+  theme_light()
+```
+
+<br>
+
+- Precincts with highest reported incidents are:
+  - Precincts 75, 73 and 67
+
+- Not in the visual, but Precincts with lowest reported incidents are:
+  - Precincts 22, 17 and 111
+
+<br>
+
+#### 4.4 Incidents by Month - Seasonal trends
+
+- Lets plot incidents by month of the year to identify if there are any seasonal trends to incidents
+
+<br>
+```{r}
+
+# Extract month
+nypd <- nypd %>%
+  mutate(month = lubridate::month(`OCCUR_DATE`, label = TRUE))
+
+# Plot incidents by month
+nypd %>%
+  count(month) %>%
+  ggplot(aes(x = month, y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Incidents by Month", x = "Month", y = "Number of Incidents")
+```
+<br>
+
+- June, July, Aug are the months of highest crime rate in NY
+- Maybe, because its a good weather period in NY and there are more people stepping out, It would be interesting to explore more on this thought.
+
+<br>
+
+#### 4.5 Incidents by Hour of the day - Daily trends
+
+- Let us plot the number of incidents during every hour of the day to find the most unsafe times and the safest times of the day.
+
+```{r}
+library(lubridate)
+
+# Extract hour
+nypd <- nypd %>%
+    mutate(hour = hour(`OCCUR_TIME`))
+
+
+# Plot incidents by time of day
+nypd %>%
+  count(hour) %>%
+  ggplot(aes(x = hour, y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Incidents by Time of Day", x = "Hour of the Day", y = "Number of Incidents")
+
+```
+<br>
+
+- As expected, most incidents occur during the night, peaking at around midnight.
+- The safest time as per the data, is from 5 am till around sunset.
+
+<br>
+
+#### 4.6 Victim profile
+
+- Lets check the victim profile in the shooting incidents
+
+```{r, message=FALSE, warning=FALSE}
+
+nypd %>%
+  count(`VIC_SEX`) %>%
+  arrange(desc(n)) %>%
+  #slice_head(n=25) %>%
+  ggplot(aes(x = reorder(`VIC_SEX`, n), y = n)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = n), hjust = 1.3, color='black', fontsize=5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Victim Profile - Sex", x = "Victim Sex", y = "Number of Incidents") +
+  theme_light()
+```
+<br>
+
+```{r, message=FALSE, warning=FALSE}
+
+nypd %>%
+  count(`VIC_RACE`) %>%
+  arrange(desc(n)) %>%
+  #slice_head(n=25) %>%
+  ggplot(aes(x = reorder(`VIC_RACE`, n), y = n)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_text(aes(label = n), hjust = 1.3, color='black', fontsize=5) +
+  labs(title = "Victim Profile - Race", x = "Victim Race", y = "Number of Incidents") +
+  theme_light()
+```
+<br>
+
+```{r, message=FALSE, warning=FALSE}
+
+nypd %>%
+  count(`VIC_AGE_GROUP`) %>%
+  arrange(desc(n)) %>%
+  #slice_head(n=25) %>%
+  ggplot(aes(x = reorder(`VIC_AGE_GROUP`, n), y = n)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_text(aes(label = n), hjust = 1.3, color='black', fontsize=5) +
+  labs(title = "Victim Profile - Age group", x = "Victim Age Group", y = "Number of Incidents") +
+  theme_light()
+```
+
+
+<br>
+
+#### 4.7 Murder
+
+- Let us see, how many shooting incidents resort to victims actually dying.
+- This will show the intensity and type of shootings
+
+```{r, message=FALSE, warning=FALSE}
+
+nypd %>%
+  count(`STATISTICAL_MURDER_FLAG`) %>%
+  arrange(desc(n)) %>%
+  #slice_head(n=25) %>%
+  ggplot(aes(x = reorder(`STATISTICAL_MURDER_FLAG`, n), y = n)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_text(aes(label = n), hjust = 1.3, color='black', fontsize=5) +
+  labs(title = "Victim died or not?", x = "Murder?", y = "Number of Incidents") +
+  theme_light()
+```
+
+## 5. Insight
+
+<br>
+
+  1. The borough which has the highest occurence of incidents is Brooklyn, followed by Bronx
+  
+  2. The borough with lowest incidences is Staten Island
+  
+  3. There was a big surge of incidences in 2020-21, maybe due to the hapless situations people were put in due to pandemic. Generally crime rates have remained quite steady. 
+  
+  4. Though Linear regression modeled on the data shows that there is a slight dip in incidences occuring over the years and it is predicted to keep going down
+  
+  5. Victim profile in these incidents mostly aligns with the following (in pure numbers). Victims are mostly:
+      - Black and Hispanic males
+      - in the age group of 18-44
+      - They Mostly survive the shooting attacks.
+  
+  
+  6. Highest incidences occur in the jurisdiction of Precincts 75, 73 and 67
+  
+  7. Precincts with the jurisdiction having lowest incident reports are 22, 17 and 111
+  
+  8. June, July and Aug have the highest reported incidences, while sundown till 5 am are the busiest times for crime
+
+
+## 6. Bias
+
+<br>
+
+  1. This analysis is done on the dataset of NYPD shooting incidence reports filed, so all the biases related to any data collection will exist, like:
+
+      1.1 **Measurement Bias** - Occuring from inaccurate collection of data or inaccurate methodologies used. 
+      We have to assume that the data is collected from authentic source of real NYPD reports
+  
+      1.2 **Reporting Bias** - Occurs when certain outcomes are more likely to be reported than others. 
+      We have to assume that the data was reported correctly. That is the officer filing the incidence report was thorough and correct about every parameter recorded
+      
+      1.3 **Selection Bias** - Occurs when the sample is not represenative of the population.
+      If all data from all precincts is not collected or if only partial data from some precincts is reported to the dataset, then a lopsided analysis can occur
+  
+  2. **Personal Bias** - 
+
+      2.1 There are many personal biases that can come across when analysing any data. 
+
+      2.2 In this data, i tried to look at the overview first and details later to overcome any biases.
+
+In conclusion, by acknowledging my biases and implementing diverse metrics, I aimed to ensure a balanced and thorough analysis. This approach helped me see the bigger picture and draw more accurate insights.
+
+<br>
+<br>
+
+--------------- END OF DOCUMENT --------------
+
+
+
+
+
+
+
